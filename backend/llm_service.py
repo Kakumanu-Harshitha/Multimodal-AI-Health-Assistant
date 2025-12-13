@@ -1,18 +1,89 @@
+# backend/llm_service.py
 import os
 from groq import Groq
 from dotenv import load_dotenv
 
 load_dotenv()
 
-LLM_MODEL = "gemma2-9b-it"  # A powerful and efficient model
-client = None
-
+LLM_MODEL = "llama-3.3-70b-versatile"
+client = Groq(api_key=os.getenv("GROQ_API_KEY")) if os.getenv("GROQ_API_KEY") else None
 # Initialize the Groq client for the LLM
 if os.getenv("GROQ_API_KEY"):
     client = Groq(api_key=os.getenv("GROQ_API_KEY"))
     print("✅ Groq client for LLM initialized.")
 else:
     print("⚠️ WARNING: GROQ_API_KEY not found! LLM service disabled.")
+
+def generate_health_report_insights(
+    profile: dict,
+    recent_symptoms: str,
+    past_context: str,
+) -> dict:
+    """
+    Returns:
+    {
+        summary: str,
+        interpretation: str,
+        food_recommendations: str
+    }
+    """
+    if not client:
+        return {
+            "summary": "LLM service unavailable.",
+            "interpretation": "LLM service unavailable.",
+            "food_recommendations": "LLM service unavailable."
+        }
+
+    system_prompt = """
+You are a clinical AI health assistant.
+Generate a SHORT, PROFESSIONAL health report.
+
+Rules:
+- No long explanations
+- No conversation tone
+- No repeated disclaimers
+- Food advice must be PERSONALIZED
+- Output must be concise and structured
+"""
+
+    user_prompt = f"""
+User Profile:
+Age: {profile.get('age')}
+Gender: {profile.get('gender')}
+Allergies: {profile.get('allergies')}
+Chronic Conditions: {profile.get('chronic_diseases')}
+
+Recent Symptoms:
+{recent_symptoms}
+
+Past Health Context:
+{past_context}
+
+Generate:
+1. Health Summary (4–5 lines)
+2. Medical Interpretation (3–4 lines)
+3. Personalized Food & Lifestyle Advice (bullet points)
+"""
+
+    response = client.chat.completions.create(
+        model=LLM_MODEL,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+    )
+
+    content = response.choices[0].message.content.strip()
+
+    # Simple structured split
+    sections = content.split("\n\n")
+
+    return {
+        "summary": sections[0] if len(sections) > 0 else "",
+        "interpretation": sections[1] if len(sections) > 1 else "",
+        "food_recommendations": sections[2] if len(sections) > 2 else "",
+    }
+
 
 def get_llm_response(prompt: str, conversation_history: list = None) -> str:
     """Generates a structured, safe medical response from the LLM."""

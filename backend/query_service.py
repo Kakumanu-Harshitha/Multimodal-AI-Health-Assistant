@@ -2,13 +2,12 @@ from fastapi import APIRouter, Depends, File, UploadFile, Form, HTTPException
 from typing import Optional
 from PIL import Image
 from transformers import BlipProcessor, BlipForConditionalGeneration
-
-# Import all required custom service modules
 from . import mongo_memory
 from . import llm_service
 from . import speech_service
 from .auth import get_current_user
-from .sql import User
+from .models import User
+
 
 # --- Router Setup ---
 router = APIRouter(prefix="/query", tags=["Query Service"])

@@ -13,3 +13,4 @@ groq
 python-multipart
 torch
 transformers
+streamlit

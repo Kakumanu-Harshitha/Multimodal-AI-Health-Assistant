@@ -1,34 +1,40 @@
+# backend/main.py
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from .sql import create_db_and_tables
-from . import auth
-from . import query_service
-from . import dashboard_service
+
+# Import shared DB Base so only one Base is used across project
+from .database import engine, Base
+
+# Import routers
+from .auth import router as auth_router
+from .profile_router import router as profile_router
+from .report_router import router as report_router
+from . import query_service, dashboard_service  # keep your existing routers
+
+# Ensure all models are registered before creating tables
+# Import models module (so model classes are evaluated and registered with Base.metadata)
+from . import models  # important: run once to register models
+
+# Create tables (only once, using the single Base from database.py)
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="AI Health Assistant API")
 
-# CORS Middleware to allow requests from the Streamlit frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # For production, restrict this to your frontend's domain
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Startup Event to create database tables
-@app.on_event("startup")
-def on_startup():
-    print("--- 🚀 Backend App Starting Up ---")
-    create_db_and_tables()
-    print("--- ✨ Startup Complete ---")
-
-# Include the routers from other service files
-app.include_router(auth.router)
+# Include routers
+app.include_router(auth_router)
+app.include_router(profile_router)
+app.include_router(report_router)
 app.include_router(query_service.router)
 app.include_router(dashboard_service.router)
 
-# Root Endpoint for health checks
 @app.get("/")
 def read_root():
     return {"message": "Welcome to the AI Health Assistant API"}

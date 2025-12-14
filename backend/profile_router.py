@@ -3,7 +3,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from datetime import datetime
 from typing import Optional
-
 from .database import get_db
 from .models import Profile
 from .schemas import ProfileIn, ProfileOut
@@ -34,7 +33,7 @@ def create_or_update_profile(
     db.commit()
     db.refresh(profile)
 
-    return profile  # FastAPI auto-converts ORM → ProfileOut
+    return profile  
 
 @router.get("/", response_model=ProfileOut, response_model_exclude_none=True)
 def get_profile(
@@ -43,9 +42,7 @@ def get_profile(
 ):
     username = current_user.username
     profile = db.query(Profile).filter(Profile.username == username).first()
-
-    # If the user has no profile yet, return a minimal schema
     if not profile:
         return {"username": username}
 
-    return profile   # FastAPI + Pydantic will auto-convert ORM → ProfileOut
+    return profile  

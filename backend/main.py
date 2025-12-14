@@ -1,21 +1,12 @@
 # backend/main.py
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-
-# Import shared DB Base so only one Base is used across project
 from .database import engine, Base
-
-# Import routers
 from .auth import router as auth_router
 from .profile_router import router as profile_router
 from .report_router import router as report_router
-from . import query_service, dashboard_service  # keep your existing routers
-
-# Ensure all models are registered before creating tables
-# Import models module (so model classes are evaluated and registered with Base.metadata)
-from . import models  # important: run once to register models
-
-# Create tables (only once, using the single Base from database.py)
+from . import query_service, dashboard_service  
+from . import models  
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="AI Health Assistant API")

@@ -7,7 +7,6 @@ load_dotenv()
 
 LLM_MODEL = "llama-3.3-70b-versatile"
 client = Groq(api_key=os.getenv("GROQ_API_KEY")) if os.getenv("GROQ_API_KEY") else None
-# Initialize the Groq client for the LLM
 if os.getenv("GROQ_API_KEY"):
     client = Groq(api_key=os.getenv("GROQ_API_KEY"))
     print("✅ Groq client for LLM initialized.")
@@ -89,8 +88,6 @@ def get_llm_response(prompt: str, conversation_history: list = None) -> str:
     """Generates a structured, safe medical response from the LLM."""
     if not client:
         return "LLM service is unavailable — please check the GROQ_API_KEY in your .env file."
-
-    # This system prompt guides the AI to provide safe and responsible answers
     system_prompt = (
         "You are a highly sophisticated and empathetic AI Health Assistant. "
         "Your primary role is to provide safe, informative, and helpful preliminary guidance based on user-provided symptoms, medical questions, or images. "

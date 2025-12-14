@@ -14,10 +14,7 @@ from .dashboard_service import extract_recent_symptoms
 
 router = APIRouter(prefix="/report", tags=["Report"])
 
-
-# -----------------------------
-# TEXT SANITIZER (NO UNICODE)
-# -----------------------------
+# TEXT SANITIZER
 def sanitize(text: str) -> str:
     return (
         str(text)
@@ -29,38 +26,29 @@ def sanitize(text: str) -> str:
         .replace("“", '"')
         .replace("”", '"')
     )
-
-
-# -----------------------------
 # PDF CLASS WITH BORDER & LOGO
-# -----------------------------
 class HealthReportPDF(FPDF):
     def header(self):
-        # -------------------------
-        # HEADER CONTENT (NO BORDER)
-        # -------------------------
+        # HEADER CONTENT 
         base_dir = os.path.dirname(os.path.abspath(__file__))
         logo_path = os.path.join(base_dir, "assets", "aidoctor.jpg")
 
-        # Logo (top-left)
+        # Logo 
         if os.path.exists(logo_path):
             self.image(logo_path, x=12, y=10, w=22)
 
-        # Title (center)
+        # Title 
         self.set_font("Helvetica", "B", 16)
         self.set_y(14)
         self.cell(0, 12, "AI HEALTH ASSISTANT - HEALTH REPORT", ln=True, align="C")
 
         # Separator line
         self.ln(6)
-
-        # -------------------------
         # PAGE BORDER (BELOW HEADER)
-        # -------------------------
         self.set_draw_color(180, 180, 180)
         self.rect(
             8,                 # x
-            self.get_y(),      # y (below header)
+            self.get_y(),      # y 
             194,               # width
             270 - self.get_y() # height
         )
@@ -87,10 +75,7 @@ class HealthReportPDF(FPDF):
             align="C"
         )
 
-  
-# -----------------------------
 # REPORT ENDPOINT
-# -----------------------------
 @router.get("/user/{username}")
 def generate_user_report(
     username: str,

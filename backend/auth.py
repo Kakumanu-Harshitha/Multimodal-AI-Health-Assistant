@@ -7,16 +7,12 @@ from jose import jwt, JWTError
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 from dotenv import load_dotenv
-
 load_dotenv()
-
 from .database import get_db
 from .models import User
 from .schemas import TokenOut, UserCreate
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
-
-# password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # JWT config

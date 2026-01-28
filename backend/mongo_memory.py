@@ -8,11 +8,15 @@ load_dotenv()
 # --- Initialize MongoDB Client ---
 MONGO_URI = os.getenv("MONGO_URI")
 memory_collection = None
+feedback_collection = None
+analytics_collection = None
 if MONGO_URI:
     try:
         client = MongoClient(MONGO_URI)
         db = client["Health_Assistant"]
         memory_collection = db["Health_Memory"]
+        feedback_collection = db["Health_Feedback"]
+        analytics_collection = db["Health_Analytics"]
         print("✅ MongoDB client initialized.")
     except Exception as e:
         print(f"⚠️ WARNING: Could not connect to MongoDB. Memory service disabled. Error: {e}")
@@ -32,6 +36,32 @@ def store_message(user_id: str, role: str, content: str):
         })
     except Exception as e:
         print(f"❌ ERROR: Failed to store message in MongoDB. Error: {e}")
+
+def log_feedback(user_id: str, rating: str, comment: str = None, context: str = None):
+    """Logs user feedback (helpful/not helpful)."""
+    if feedback_collection is None: return
+    try:
+        feedback_collection.insert_one({
+            "user_id": user_id,
+            "rating": rating, # "positive" or "negative"
+            "comment": comment,
+            "context": context,
+            "timestamp": datetime.now(timezone.utc)
+        })
+    except Exception as e:
+        print(f"❌ ERROR: Failed to log feedback. Error: {e}")
+
+def log_analytics(event_type: str, details: dict):
+    """Logs system events for analysis (e.g., Escalation triggered)."""
+    if analytics_collection is None: return
+    try:
+        analytics_collection.insert_one({
+            "event_type": event_type,
+            "details": details,
+            "timestamp": datetime.now(timezone.utc)
+        })
+    except Exception as e:
+        print(f"❌ ERROR: Failed to log analytics. Error: {e}")
 
 def get_user_memory(user_id: str, limit: int = 10) -> list:
     """Retrieves the last 'limit' messages for the LLM, in chronological order."""
@@ -60,3 +90,12 @@ def get_full_history_for_dashboard(user_id: str, limit: int = 100) -> list:
     except Exception as e:
         print(f"❌ ERROR: Failed to retrieve dashboard history from MongoDB. Error: {e}")
         return []
+
+def clear_user_memory(user_id: str):
+    """Clears all conversation history for a user."""
+    if memory_collection is None: return
+    try:
+        memory_collection.delete_many({"user_id": user_id})
+        print(f"✅ Memory cleared for user: {user_id}")
+    except Exception as e:
+        print(f"❌ ERROR: Failed to clear user memory. Error: {e}")

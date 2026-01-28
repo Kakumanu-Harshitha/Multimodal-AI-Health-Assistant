@@ -1,2 +1,8 @@
+# Environment variables
 .env
-venv
+
+# Python virtual environment
+health/
+
+# React dependencies
+frontend_react/node_modules/

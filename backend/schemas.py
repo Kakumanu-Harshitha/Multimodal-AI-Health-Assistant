@@ -29,4 +29,46 @@ class ProfileOut(ProfileIn):
     updated_at: Optional[datetime] = None
 
     class Config:
-        orm_mode = True
+        from_attributes = True
+
+# --- LLM / Report Schemas ---
+from typing import List, Dict, Any
+
+class ClarificationQuestions(BaseModel):
+    type: str = "clarification_questions"
+    context: str
+    questions: List[str]
+
+class RiskAssessment(BaseModel):
+    severity: str  # LOW, MEDIUM, HIGH, EMERGENCY, UNKNOWN
+    confidence_score: float  # 0.0 to 1.0
+    uncertainty_reason: Optional[str] = None
+
+class Explanation(BaseModel):
+    reasoning: str
+    history_factor: Optional[str] = None
+    profile_factor: Optional[str] = None
+
+class RecommendedSpecialist(BaseModel):
+    type: str
+    reason: str
+    urgency: str  # Routine | Soon | Urgent
+
+class Recommendations(BaseModel):
+    immediate_action: str
+    lifestyle_advice: List[str]
+    food_advice: List[str]
+
+class KnowledgeSource(BaseModel):
+    source: str
+    description: str
+
+class HealthReport(BaseModel):
+    summary: str
+    possible_causes: List[str]
+    risk_assessment: RiskAssessment
+    explanation: Explanation
+    recommended_specialist: Optional[RecommendedSpecialist] = None
+    recommendations: Recommendations
+    knowledge_sources: List[KnowledgeSource] = []
+    disclaimer: str

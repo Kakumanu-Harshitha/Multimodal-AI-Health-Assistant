@@ -4,7 +4,6 @@ sqlalchemy
 psycopg2-binary
 python-dotenv
 python-jose
-passlib[bcrypt]
 pymongo
 requests
 pillow
@@ -13,4 +12,9 @@ groq
 python-multipart
 torch
 transformers
-streamlit
+fpdf
+passlib==1.7.4 
+bcrypt==3.2.2
+pinecone
+sentence-transformers
+numpy

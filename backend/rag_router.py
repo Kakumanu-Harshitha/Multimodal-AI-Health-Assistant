@@ -378,11 +378,10 @@ class RAGRouter:
         """
         Determine if a follow-up question should be asked.
         
-        CRITICAL ANTI-LOOP RULES:
-        1. NEVER ask follow-ups for common symptoms
-        2. NEVER ask follow-ups for disease symptom queries
-        3. Max 1 follow-up per conversation
-        4. Only ask if truly necessary for safety
+        ENTERPRISE CLINICAL RULES:
+        1. Allow follow-ups if query is brief (< 5 words) and lacks context (duration/severity)
+        2. Max 1 follow-up per topic to prevent loops
+        3. Only ask if it helps narrow down potential causes safely
         
         Args:
             query: User's query text
@@ -392,40 +391,50 @@ class RAGRouter:
         Returns:
             True if should ask follow-up, False otherwise
         """
-        # Rule 1: NEVER ask for common symptoms
-        if self.should_use_symptom_shortcut(query, intent):
-            return False
-        
-        # Rule 2: NEVER ask for disease symptom queries
         query_lower = query.lower()
-        disease_symptom_patterns = [
-            "symptoms of", "symptoms for", "what are the symptoms",
-            "signs of", "signs and symptoms"
-        ]
         
-        if any(pattern in query_lower for pattern in disease_symptom_patterns):
-            return False
-        
-        # Rule 3: Check if we already asked a follow-up
+        # Rule 1: Max 1 follow-up per interaction sequence
         if history:
             # Check last 3 interactions for clarification questions
             for interaction in history[-3:]:
                 if interaction.get('type') == 'clarification_questions':
-                    return False  # Already asked
+                    return False  # Already asked recently, don't loop
         
-        # Rule 4: Only ask for vague personal symptoms
+        # Rule 2: NEVER ask for disease symptom queries (they are informational)
+        disease_symptom_patterns = [
+            "symptoms of", "symptoms for", "what are the symptoms",
+            "signs of", "signs and symptoms"
+        ]
+        if any(pattern in query_lower for pattern in disease_symptom_patterns):
+            return False
+        
+        # Rule 3: Check for brevity and lack of context
+        word_count = len(query.split())
+        has_duration = any(word in query_lower for word in ["day", "week", "month", "long", "since", "yesterday"])
+        has_severity = any(word in query_lower for word in ["severe", "mild", "bad", "worst", "intense", "low"])
+        
+        # If it's a symptom query and very short, ask for more details
+        if intent == QueryIntent.SYMPTOM_QUERY and word_count < 6 and not (has_duration or has_severity):
+            return True
+            
+        # Rule 4: Vague personal symptoms always need clarification
         vague_patterns = [
-            r"^i don't feel well$",
-            r"^something is wrong$",
-            r"^i feel bad$",
-            r"^not feeling good$"
+            r"i don't feel well",
+            r"something is wrong",
+            r"i feel bad",
+            r"not feeling good",
+            r"i am sick",
+            r"feeling unwell"
         ]
         
         for pattern in vague_patterns:
             if re.search(pattern, query_lower):
-                return True  # Vague query - clarification may help
+                return True
         
-        # Default: Don't ask follow-up
+        # Rule 5: If it's a common symptom but no context provided, allow one follow-up
+        if self.should_use_symptom_shortcut(query, intent) and word_count < 4:
+            return True
+            
         return False
     
     def filter_results_by_dataset(

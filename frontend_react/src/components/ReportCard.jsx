@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { AlertTriangle, CheckCircle2, AlertOctagon, Info, Stethoscope, Utensils, Activity, Download, FileText, Brain, ShieldCheck, ThumbsUp, ThumbsDown, HelpCircle, Volume2, User as UserIcon } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, AlertOctagon, Info, Stethoscope, Utensils, Activity, Download, FileText, Brain, ShieldCheck, ThumbsUp, ThumbsDown, HelpCircle, Volume2, User as UserIcon, Image as ImageIcon } from 'lucide-react';
 import clsx from 'clsx';
 import { dashboardService, feedbackService } from '../services/api';
 
@@ -23,7 +23,17 @@ const SeverityBadge = ({ level }) => {
 };
 
 const ConfidenceBar = ({ score, reason }) => {
-  const percentage = Math.round(score * 100);
+  // Handle both number (0-1) and string (Low/Medium/High) scores
+  let percentage = 0;
+  if (typeof score === 'number') {
+    percentage = Math.round(score * 100);
+  } else if (typeof score === 'string') {
+    const s = score.toLowerCase();
+    if (s.includes('high')) percentage = 90;
+    else if (s.includes('medium')) percentage = 60;
+    else if (s.includes('low')) percentage = 30;
+  }
+  
   const color = percentage > 80 ? "bg-green-500" : percentage > 50 ? "bg-yellow-500" : "bg-red-500";
   
   return (
@@ -59,13 +69,13 @@ const ReportCard = ({ data, audioUrl }) => {
   const handleDownload = async () => {
     try {
       setDownloading(true);
-      const username = localStorage.getItem('username');
-      if (!username) {
+      const email = localStorage.getItem('email');
+      if (!email) {
         alert("Please log in to download reports.");
         return;
       }
       
-      const blob = await dashboardService.getReportPdf(username);
+      const blob = await dashboardService.getReportPdf(email);
       const url = window.URL.createObjectURL(new Blob([blob]));
       const link = document.createElement('a');
       link.href = url;
@@ -95,6 +105,294 @@ const ReportCard = ({ data, audioUrl }) => {
     }
   }
 
+  // Handle General Health Report (Symptom Analysis)
+  if (report?.type === 'health_report') {
+    return (
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden max-w-3xl animate-in fade-in slide-in-from-bottom-4">
+        {audioUrl && (
+          <div className="px-6 pt-4">
+            <div className="bg-gray-50 rounded-lg p-2 flex items-center gap-3">
+                 <div className="w-8 h-8 bg-primary/10 rounded-full flex items-center justify-center text-primary">
+                    <Volume2 size={16} />
+                 </div>
+                 <audio controls src={`http://localhost:8000${audioUrl}`} className="w-full h-8 bg-transparent" />
+            </div>
+          </div>
+        )}
+        
+        <div className="p-6 border-b border-gray-100 bg-gradient-to-r from-teal-50 to-white">
+          <div className="flex items-center justify-between gap-3 mb-2">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-teal-100 rounded-lg text-teal-600">
+                <Activity className="h-5 w-5" />
+              </div>
+              <h3 className="text-lg font-semibold text-gray-900">Health Information</h3>
+            </div>
+            <button 
+              onClick={handleDownload}
+              disabled={downloading}
+              className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-white border border-gray-200 text-xs font-medium text-gray-600 hover:bg-gray-50 hover:text-primary transition-colors shadow-sm"
+            >
+              {downloading ? <span className="w-3 h-3 border-2 border-gray-400 border-t-primary rounded-full animate-spin"></span> : <Download className="h-3.5 w-3.5" />}
+              {downloading ? 'Generating...' : 'PDF'}
+            </button>
+          </div>
+          <p className="text-gray-700 text-sm leading-relaxed mb-4">{report.health_information || report.summary}</p>
+          {report.ai_confidence && <ConfidenceBar score={report.ai_confidence} />}
+        </div>
+
+        <div className="p-6 space-y-6">
+          {report.possible_conditions?.length > 0 && (
+            <div>
+              <h4 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
+                <Brain className="h-4 w-4 text-primary" />
+                Possible Considerations
+              </h4>
+              <div className="flex flex-wrap gap-2">
+                {report.possible_conditions.map((cond, i) => (
+                  <span key={i} className="px-3 py-1 bg-blue-50 text-blue-700 text-xs rounded-full border border-blue-100">
+                    {cond}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="bg-blue-50 rounded-xl p-4 border border-blue-100">
+              <h4 className="text-blue-900 font-semibold text-sm mb-2 flex items-center gap-2">
+                <Stethoscope className="h-4 w-4" />
+                Next Steps
+              </h4>
+              <p className="text-blue-800 text-xs leading-relaxed">{report.recommended_next_steps}</p>
+            </div>
+            
+            {report.trusted_sources?.length > 0 && (
+              <div className="bg-gray-50 rounded-xl p-4 border border-gray-100">
+                <h4 className="text-gray-900 font-semibold text-sm mb-2 flex items-center gap-2">
+                  <ShieldCheck className="h-4 w-4 text-green-600" />
+                  Sources
+                </h4>
+                <ul className="text-gray-600 text-[10px] space-y-1 list-disc list-inside">
+                  {report.trusted_sources.map((src, i) => <li key={i}>{src}</li>)}
+                </ul>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex items-start gap-3">
+          <Info className="h-4 w-4 text-gray-400 mt-0.5 shrink-0" />
+          <p className="text-xs text-gray-500 leading-relaxed">{report.disclaimer}</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Handle Medical Report Analysis (New Strict Format)
+  if (report?.type === 'medical_report_analysis') {
+    return (
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden max-w-3xl animate-in fade-in slide-in-from-bottom-4">
+        {audioUrl && (
+          <div className="px-6 pt-4">
+            <div className="bg-gray-50 rounded-lg p-2 flex items-center gap-3">
+                 <div className="w-8 h-8 bg-primary/10 rounded-full flex items-center justify-center text-primary">
+                    <Volume2 size={16} />
+                 </div>
+                 <audio controls src={`http://localhost:8000${audioUrl}`} className="w-full h-8 bg-transparent" />
+            </div>
+          </div>
+        )}
+        
+        <div className="p-6 border-b border-gray-100 bg-gradient-to-r from-blue-50 to-white">
+          <div className="flex items-center justify-between gap-3 mb-2">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-blue-100 rounded-lg text-blue-600">
+                <FileText className="h-5 w-5" />
+              </div>
+              <h3 className="text-lg font-semibold text-gray-900">Medical Report Analysis</h3>
+            </div>
+            <button 
+              onClick={handleDownload}
+              disabled={downloading}
+              className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-white border border-gray-200 text-xs font-medium text-gray-600 hover:bg-gray-50 hover:text-primary transition-colors shadow-sm"
+            >
+              {downloading ? <span className="w-3 h-3 border-2 border-gray-400 border-t-primary rounded-full animate-spin"></span> : <Download className="h-3.5 w-3.5" />}
+              {downloading ? 'Generating...' : 'PDF'}
+            </button>
+          </div>
+          <p className="text-gray-700 text-sm leading-relaxed mb-4">{report.summary}</p>
+          
+          {report.summary?.includes("seek medical attention") && (
+            <div className="mb-4 bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3 animate-pulse">
+              <AlertOctagon className="h-5 w-5 text-red-600 shrink-0 mt-0.5" />
+              <p className="text-sm font-bold text-red-700">
+                Some values are significantly outside the normal range. Please seek medical attention.
+              </p>
+            </div>
+          )}
+
+          {report.ai_confidence && <ConfidenceBar score={report.ai_confidence} />}
+        </div>
+
+        <div className="p-6">
+          <h4 className="text-sm font-semibold text-gray-900 mb-4 flex items-center gap-2">
+            <Activity className="h-4 w-4 text-primary" />
+            Test Analysis
+          </h4>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm text-left">
+              <thead className="text-xs text-gray-500 uppercase bg-gray-50">
+                <tr>
+                  <th className="px-4 py-2 font-medium">Test Name</th>
+                  <th className="px-4 py-2 font-medium">Value</th>
+                  <th className="px-4 py-2 font-medium">Normal Range</th>
+                  <th className="px-4 py-2 font-medium">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {report.test_analysis?.map((test, i) => (
+                  <tr key={i} className="hover:bg-gray-50 transition-colors">
+                    <td className="px-4 py-3 font-medium text-gray-900">
+                      <div>{test.test_name}</div>
+                      <div className="text-[10px] text-gray-400 font-normal mt-0.5">{test.explanation}</div>
+                    </td>
+                    <td className="px-4 py-3 text-gray-700 font-semibold">{test.value}</td>
+                    <td className="px-4 py-3 text-gray-500">{test.normal_range}</td>
+                    <td className="px-4 py-3">
+                      <span className={clsx(
+                        "px-2 py-0.5 rounded-full text-[10px] font-bold uppercase",
+                        test.status?.toLowerCase() === 'normal' ? "bg-green-100 text-green-700" : 
+                        test.status?.toLowerCase() === 'borderline' ? "bg-yellow-100 text-yellow-700" :
+                        (test.status?.toLowerCase() === 'high' || test.status?.toLowerCase() === 'low') ? "bg-red-100 text-red-700" :
+                        "bg-gray-100 text-gray-700"
+                      )}>
+                        {test.status}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="bg-green-50 rounded-xl p-4 border border-green-100">
+              <h4 className="text-green-900 font-semibold text-sm mb-2 flex items-center gap-2">
+                <Utensils className="h-4 w-4" />
+                General Guidance
+              </h4>
+              <ul className="text-green-800 text-xs space-y-1 list-disc list-inside">
+                {report.general_guidance?.map((item, i) => <li key={i}>{item}</li>)}
+              </ul>
+            </div>
+            <div className="bg-orange-50 rounded-xl p-4 border border-orange-100">
+              <h4 className="text-orange-900 font-semibold text-sm mb-2 flex items-center gap-2">
+                <Stethoscope className="h-4 w-4" />
+                When to Consult a Doctor
+              </h4>
+              <ul className="text-orange-800 text-xs space-y-1 list-disc list-inside">
+                {report.when_to_consult_doctor?.map((item, i) => <li key={i}>{item}</li>)}
+              </ul>
+            </div>
+          </div>
+        </div>
+
+        <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex items-start gap-3">
+          <Info className="h-4 w-4 text-gray-400 mt-0.5 shrink-0" />
+          <p className="text-xs text-gray-500 leading-relaxed">{report.disclaimer}</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Handle Medical Report Analysis (Legacy Format)
+  if (report?.input_type === 'medical_report') {
+    return (
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden max-w-3xl animate-in fade-in slide-in-from-bottom-4">
+        {audioUrl && (
+          <div className="px-6 pt-4">
+            <div className="bg-gray-50 rounded-lg p-2 flex items-center gap-3">
+                 <div className="w-8 h-8 bg-primary/10 rounded-full flex items-center justify-center text-primary">
+                    <Volume2 size={16} />
+                 </div>
+                 <audio controls src={`http://localhost:8000${audioUrl}`} className="w-full h-8 bg-transparent" />
+            </div>
+          </div>
+        )}
+        
+        <div className="p-6 border-b border-gray-100 bg-gradient-to-r from-green-50 to-white">
+          <div className="flex items-center justify-between gap-3 mb-2">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-green-100 rounded-lg text-green-600">
+                <FileText className="h-5 w-5" />
+              </div>
+              <h3 className="text-lg font-semibold text-gray-900">{report.report_type || "Medical Report Analysis"}</h3>
+            </div>
+            <button 
+              onClick={handleDownload}
+              disabled={downloading}
+              className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-white border border-gray-200 text-xs font-medium text-gray-600 hover:bg-gray-50 hover:text-primary transition-colors shadow-sm"
+            >
+              {downloading ? <span className="w-3 h-3 border-2 border-gray-400 border-t-primary rounded-full animate-spin"></span> : <Download className="h-3.5 w-3.5" />}
+              {downloading ? 'Generating...' : 'PDF'}
+            </button>
+          </div>
+          <p className="text-gray-700 text-sm leading-relaxed">{report.interpretation}</p>
+        </div>
+
+        <div className="p-6">
+          <h4 className="text-sm font-semibold text-gray-900 mb-4 flex items-center gap-2">
+            <Activity className="h-4 w-4 text-primary" />
+            Detected Lab Markers
+          </h4>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm text-left">
+              <thead className="text-xs text-gray-500 uppercase bg-gray-50">
+                <tr>
+                  <th className="px-4 py-2 font-medium">Marker</th>
+                  <th className="px-4 py-2 font-medium">Value</th>
+                  <th className="px-4 py-2 font-medium">Reference</th>
+                  <th className="px-4 py-2 font-medium">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {report.key_values?.map((kv, i) => (
+                  <tr key={i} className="hover:bg-gray-50 transition-colors">
+                    <td className="px-4 py-3 font-medium text-gray-900">{kv.marker}</td>
+                    <td className="px-4 py-3 text-gray-700">{kv.value}</td>
+                    <td className="px-4 py-3 text-gray-500">{kv.range}</td>
+                    <td className="px-4 py-3">
+                      <span className={clsx(
+                        "px-2 py-0.5 rounded-full text-[10px] font-bold uppercase",
+                        kv.status?.toLowerCase() === 'normal' ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
+                      )}>
+                        {kv.status}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="mt-6 bg-blue-50 rounded-xl p-4 border border-blue-100">
+            <h4 className="text-blue-900 font-semibold text-sm mb-1 flex items-center gap-2">
+              <ShieldCheck className="h-4 w-4" />
+              Recommendation
+            </h4>
+            <p className="text-blue-800 text-sm">{report.recommendation}</p>
+          </div>
+        </div>
+
+        <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex items-start gap-3">
+          <Info className="h-4 w-4 text-gray-400 mt-0.5 shrink-0" />
+          <p className="text-xs text-gray-500 leading-relaxed">{report.disclaimer}</p>
+        </div>
+      </div>
+    );
+  }
+
   // Handle Clarification Questions (Triage Mode)
   if (report?.type === 'clarification_questions') {
     return (
@@ -121,6 +419,80 @@ const ReportCard = ({ data, audioUrl }) => {
             ))}
          </div>
          <p className="mt-4 text-xs text-blue-600 font-medium uppercase tracking-wide">Please answer to proceed</p>
+      </div>
+    );
+  }
+
+  // Handle Medical Image Analysis (Strict Format)
+  if (report?.input_type === 'medical_image') {
+    return (
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden max-w-3xl animate-in fade-in slide-in-from-bottom-4">
+        {audioUrl && (
+          <div className="px-6 pt-4">
+            <div className="bg-gray-50 rounded-lg p-2 flex items-center gap-3">
+                 <div className="w-8 h-8 bg-primary/10 rounded-full flex items-center justify-center text-primary">
+                    <Volume2 size={16} />
+                 </div>
+                 <audio controls src={`http://localhost:8000${audioUrl}`} className="w-full h-8 bg-transparent" />
+            </div>
+          </div>
+        )}
+
+        <div className="p-6 border-b border-gray-100 bg-gradient-to-r from-blue-50 to-white">
+          <div className="flex items-center justify-between gap-3 mb-2">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-blue-100 rounded-lg text-blue-600">
+                <ImageIcon className="h-5 w-5" />
+              </div>
+              <h3 className="text-lg font-semibold text-gray-900">Physical Image Analysis</h3>
+            </div>
+            <button 
+              onClick={handleDownload}
+              disabled={downloading}
+              className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-white border border-gray-200 text-xs font-medium text-gray-600 hover:bg-gray-50 hover:text-primary transition-colors shadow-sm"
+            >
+              {downloading ? <span className="w-3 h-3 border-2 border-gray-400 border-t-primary rounded-full animate-spin"></span> : <Download className="h-3.5 w-3.5" />}
+              {downloading ? 'Generating...' : 'PDF'}
+            </button>
+          </div>
+          <div className="flex flex-wrap gap-2 mt-3">
+            {report.observations?.map((obs, i) => (
+              <span key={i} className="px-3 py-1 bg-white border border-blue-100 text-blue-700 text-xs rounded-full font-medium shadow-sm">
+                {obs}
+              </span>
+            ))}
+          </div>
+        </div>
+
+        <div className="p-6 space-y-6">
+          <div>
+            <h4 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
+              <Stethoscope className="h-4 w-4 text-primary" />
+              Possible Considerations
+            </h4>
+            <ul className="space-y-2">
+              {report.possible_conditions?.map((cond, i) => (
+                <li key={i} className="flex items-start gap-3 text-sm text-gray-600">
+                  <span className="w-1.5 h-1.5 rounded-full bg-primary mt-2 shrink-0" />
+                  {cond}
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <div className="bg-orange-50 rounded-xl p-4 border border-orange-100">
+            <h4 className="text-orange-900 font-semibold text-sm mb-1 flex items-center gap-2">
+              <Utensils className="h-4 w-4" />
+              General Care Advice
+            </h4>
+            <p className="text-orange-800 text-sm">{report.general_advice}</p>
+          </div>
+        </div>
+
+        <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex items-start gap-3">
+          <Info className="h-4 w-4 text-gray-400 mt-0.5 shrink-0" />
+          <p className="text-xs text-gray-500 leading-relaxed">{report.disclaimer}</p>
+        </div>
       </div>
     );
   }

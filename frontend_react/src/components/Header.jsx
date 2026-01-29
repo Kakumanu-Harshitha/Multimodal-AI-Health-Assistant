@@ -9,8 +9,8 @@ const Header = () => {
   const location = useLocation();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [profileWarning, setProfileWarning] = useState(false);
-  const username = localStorage.getItem('username');
-  const isLoggedIn = !!username;
+  const email = localStorage.getItem('email');
+  const isLoggedIn = !!email;
 
   useEffect(() => {
     if (isLoggedIn) {
@@ -77,7 +77,7 @@ const Header = () => {
         <div className="hidden md:flex items-center gap-4">
           {isLoggedIn ? (
             <div className="flex items-center gap-3">
-              <span className="text-sm text-gray-500 hidden lg:block">Hello, {username}</span>
+              <span className="text-sm text-gray-500 hidden lg:block">Hello, {email.split('@')[0]}</span>
               <button 
                 onClick={handleLogout}
                 className="flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium text-gray-600 hover:bg-gray-100 transition-colors border border-gray-200"

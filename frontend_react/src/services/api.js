@@ -16,20 +16,20 @@ api.interceptors.request.use((config) => {
 });
 
 export const authService = {
-  login: async (username, password) => {
+  login: async (email, password) => {
     const formData = new URLSearchParams();
-    formData.append('username', username);
+    formData.append('username', email); // OAuth2PasswordRequestForm expects 'username' field, we pass email
     formData.append('password', password);
     const response = await api.post('/auth/login', formData);
     return response.data;
   },
-  signup: async (username, password) => {
-    const response = await api.post('/auth/signup', { username, password });
+  signup: async (email, password) => {
+    const response = await api.post('/auth/signup', { email, password });
     return response.data;
   },
   logout: () => {
     localStorage.removeItem('token');
-    localStorage.removeItem('username');
+    localStorage.removeItem('email');
   }
 };
 
@@ -79,8 +79,8 @@ export const dashboardService = {
     const response = await api.delete('/dashboard/history');
     return response.data;
   },
-  getReportPdf: async (username) => {
-    const response = await api.get(`/report/user/${username}`, {
+  getReportPdf: async (email) => {
+    const response = await api.get(`/report/user/${email}`, {
       responseType: 'blob',
     });
     return response.data;
@@ -93,6 +93,21 @@ export const feedbackService = {
       rating,
       context
     });
+    return response.data;
+  }
+};
+
+export const securityService = {
+  initiateChangePassword: async () => {
+    const response = await api.post('/security/change-password/init');
+    return response.data;
+  },
+  verifyOtp: async (otp) => {
+    const response = await api.post('/security/change-password/verify', { otp });
+    return response.data;
+  },
+  completeChangePassword: async (newPassword) => {
+    const response = await api.post('/security/change-password/complete', { new_password: newPassword });
     return response.data;
   }
 };

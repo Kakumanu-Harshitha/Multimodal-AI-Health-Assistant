@@ -3,7 +3,7 @@ from io import BytesIO
 import os
 import json
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from fpdf import FPDF
@@ -12,6 +12,7 @@ from .auth import get_current_user
 from .models import User as SQLUser, Profile
 from .database import get_db
 from . import mongo_memory
+from .audit_logger import audit_logger
 
 router = APIRouter(prefix="/report", tags=["Report"])
 
@@ -30,21 +31,54 @@ def sanitize(text: str) -> str:
 
 def normalize_report_data(data: dict) -> dict:
     """
-    Normalizes both Old (Flat) and New (Nested) JSON schemas into a standard format for PDF generation.
+    Normalizes all possible report schemas (Health Report, Medical Analysis, Legacy, etc.)
+    into a standard format for PDF generation.
     """
     normalized = {
-        "summary": data.get("summary", "No summary available."),
+        "summary": "",
         "severity": "UNKNOWN",
         "conditions": [],
         "analysis": "",
         "recommendations": [],
         "food_advice": [],
-        "red_flags": []
+        "red_flags": [],
+        "sources": []
     }
 
-    # 1. Handle New Nested Schema (Google-Level)
-    if "risk_assessment" in data:
+    # 1. NEW STRUCTURE: Health Report (Symptom Shortcut / RAG)
+    if data.get("type") == "health_report" or "health_information" in data:
+        normalized["summary"] = data.get("health_information", data.get("summary", ""))
+        normalized["analysis"] = data.get("reasoning_brief", "")
+        normalized["conditions"] = data.get("possible_conditions", [])
+        normalized["recommendations"] = [data.get("recommended_next_steps", "")]
+        normalized["sources"] = data.get("trusted_sources", [])
+        normalized["severity"] = "MODERATE" # Default for symptom reports if not specified
+
+    # 2. NEW STRUCTURE: Medical Report Analysis (Lab Results)
+    elif data.get("type") == "medical_report_analysis" or "test_analysis" in data:
+        normalized["summary"] = data.get("summary", "Medical report analysis.")
+        normalized["severity"] = "UNKNOWN"
+        
+        # Convert test analysis to analysis text
+        test_text = []
+        for test in data.get("test_analysis", []):
+            test_text.append(f"{test.get('test_name')}: {test.get('value')} ({test.get('status')}) - {test.get('explanation')}")
+        normalized["analysis"] = "\n".join(test_text)
+        
+        normalized["recommendations"] = data.get("general_guidance", [])
+        normalized["red_flags"] = data.get("when_to_consult_doctor", [])
+
+    # 3. STRUCTURE: Medical Image Analysis
+    elif data.get("input_type") == "medical_image" or "observations" in data:
+        normalized["summary"] = "Physical Image Analysis Findings."
+        normalized["analysis"] = ", ".join(data.get("observations", []))
+        normalized["conditions"] = data.get("possible_conditions", [])
+        normalized["recommendations"] = [data.get("general_advice", "")]
+
+    # 4. Handle Nested Schema (General AI Assessment)
+    elif "risk_assessment" in data:
         risk = data.get("risk_assessment", {})
+        normalized["summary"] = data.get("summary", "")
         normalized["severity"] = risk.get("severity", "UNKNOWN")
         
         explanation = data.get("explanation", {})
@@ -57,6 +91,11 @@ def normalize_report_data(data: dict) -> dict:
         normalized["food_advice"] = recs.get("food_advice", [])
         normalized["sources"] = data.get("knowledge_sources", [])
         
+        if recs.get("immediate_action"):
+            normalized["red_flags"].append(recs["immediate_action"])
+            
+        normalized["conditions"] = data.get("possible_causes", [])
+
         # Specialist Suggestion
         spec = data.get("recommended_specialist", {})
         if spec:
@@ -66,24 +105,20 @@ def normalize_report_data(data: dict) -> dict:
                  "urgency": spec.get("urgency", "Routine")
              }
 
-        # Treat immediate_action as a Red Flag if high severity
-        if recs.get("immediate_action"):
-            normalized["red_flags"].append(recs["immediate_action"])
-            
-        normalized["conditions"] = data.get("possible_causes", [])
-
-    # 2. Handle Old Flat Schema
+    # 5. Handle Old Flat Schema / Legacy
     else:
+        normalized["summary"] = data.get("summary", data.get("interpretation", "No summary available."))
         normalized["severity"] = data.get("severity", "UNKNOWN")
-        normalized["conditions"] = data.get("possible_conditions", [])
+        normalized["conditions"] = data.get("possible_conditions", data.get("possible_causes", []))
         normalized["analysis"] = data.get("analysis", "")
         
-        # Old recommendations might be list or string
         old_recs = data.get("recommendations", [])
         if isinstance(old_recs, list):
             normalized["recommendations"] = old_recs
         elif isinstance(old_recs, str):
              normalized["recommendations"] = [old_recs]
+        elif "recommendation" in data:
+             normalized["recommendations"] = [data["recommendation"]]
              
         normalized["food_advice"] = data.get("food_recommendations", [])
         normalized["red_flags"] = data.get("red_flags", [])
@@ -150,9 +185,9 @@ class HealthReportPDF(FPDF):
         
         # Row 1
         self.set_font("Helvetica", "B", 11)
-        self.cell(col_width, row_height, "Name:", border=0)
+        self.cell(col_width, row_height, "Email:", border=0)
         self.set_font("Helvetica", "", 11)
-        self.cell(col_width, row_height, sanitize(profile.get('username', 'N/A')), border=0)
+        self.cell(col_width, row_height, sanitize(profile.get('email', 'N/A')), border=0)
         
         self.set_font("Helvetica", "B", 11)
         self.cell(col_width, row_height, "Age / Gender:", border=0)
@@ -206,19 +241,27 @@ class HealthReportPDF(FPDF):
         self.cell(0, 10, f"Page {self.page_no()}", align="C")
 
 # REPORT ENDPOINT
-@router.get("/user/{username}")
-def generate_user_report(
-    username: str,
+@router.get("/user/{email}")
+async def generate_user_report(
+    email: str,
+    request: Request,
     current_user: SQLUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if username != current_user.username:
+    if email != current_user.email:
+        await audit_logger.log_event(
+            action="REPORT_DOWNLOAD",
+            status="FAILURE",
+            user_id=current_user.id,
+            request=request,
+            metadata={"target_email": email, "reason": "Unauthorized access attempt"}
+        )
         raise HTTPException(status_code=403, detail="Unauthorized")
 
     # 1. Fetch Profile
-    profile_obj = db.query(Profile).filter(Profile.username == username).first()
+    profile_obj = db.query(Profile).filter(Profile.email == email).first()
     profile_data = {
-        "username": username,
+        "email": email,
         "age": str(profile_obj.age) if profile_obj and profile_obj.age else "N/A",
         "gender": profile_obj.gender if profile_obj and profile_obj.gender else "N/A",
         "height_cm": str(profile_obj.height_cm) if profile_obj and profile_obj.height_cm else "N/A",
@@ -236,17 +279,28 @@ def generate_user_report(
             pass
 
     # 2. Fetch Latest Report from History
-    full_history = mongo_memory.get_full_history_for_dashboard(str(current_user.id), limit=20)
+    # Note: mongo_memory.get_full_history_for_dashboard returns messages in chronological order (Oldest -> Newest).
+    full_history = mongo_memory.get_full_history_for_dashboard(str(current_user.id), limit=50)
     
     raw_report = None
     if full_history:
+        # Search from Newest to Oldest to find the most recent report
         for msg in reversed(full_history):
             if msg.get("role") == "assistant":
                 try:
                     content = msg.get("content", "")
                     parsed = json.loads(content)
                     # Heuristic to check if it's a report
-                    if "summary" in parsed: 
+                    is_report = (
+                        parsed.get("type") in ["health_report", "medical_report_analysis"] or
+                        parsed.get("input_type") in ["medical_image", "medical_report"] or
+                        "health_information" in parsed or
+                        "test_analysis" in parsed or
+                        "observations" in parsed or
+                        "risk_assessment" in parsed or
+                        "summary" in parsed
+                    )
+                    if is_report:
                         raw_report = parsed
                         break
                 except:
@@ -262,6 +316,14 @@ def generate_user_report(
     pdf = HealthReportPDF()
     pdf.add_page()
     
+    await audit_logger.log_event(
+        action="REPORT_DOWNLOAD",
+        status="SUCCESS",
+        user_id=current_user.id,
+        request=request,
+        metadata={"email": email, "severity": report["severity"]}
+    )
+
     # Profile Section
     pdf.profile_section(profile_data, bmi, report["severity"])
     
@@ -370,7 +432,7 @@ def generate_user_report(
     pdf_content = pdf.output(dest='S').encode('latin-1')
     pdf_buffer = BytesIO(pdf_content)
     
-    filename = f"HealthReport_{username}_{datetime.now().strftime('%Y%m%d')}.pdf"
+    filename = f"HealthReport_{email}_{datetime.now().strftime('%Y%m%d')}.pdf"
     
     return StreamingResponse(
         pdf_buffer,

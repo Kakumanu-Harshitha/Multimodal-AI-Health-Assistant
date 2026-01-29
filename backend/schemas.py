@@ -6,12 +6,16 @@ from datetime import datetime
 # --- Auth schemas ---
 class TokenOut(BaseModel):
     access_token: str
+    refresh_token: str
     token_type: str
     user_id: int
-    username: str
+    email: str
+
+class RefreshTokenIn(BaseModel):
+    refresh_token: str
 
 class UserCreate(BaseModel):
-    username: str
+    email: str
     password: str
 
 # --- Profile schemas ---
@@ -25,7 +29,7 @@ class ProfileIn(BaseModel):
     chronic_diseases: Optional[str] = None
 
 class ProfileOut(ProfileIn):
-    username: str
+    email: str
     updated_at: Optional[datetime] = None
 
     class Config:
@@ -72,3 +76,14 @@ class HealthReport(BaseModel):
     recommendations: Recommendations
     knowledge_sources: List[KnowledgeSource] = []
     disclaimer: str
+
+# --- TOTP / Password Change Schemas ---
+class TOTPInitOut(BaseModel):
+    qr_code: str # Base64 encoded PNG
+    expires_at: datetime
+
+class TOTPVerifyIn(BaseModel):
+    otp: str
+
+class PasswordChangeIn(BaseModel):
+    new_password: str

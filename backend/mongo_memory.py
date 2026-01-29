@@ -64,29 +64,34 @@ def log_analytics(event_type: str, details: dict):
         print(f"❌ ERROR: Failed to log analytics. Error: {e}")
 
 def get_user_memory(user_id: str, limit: int = 10) -> list:
-    """Retrieves the last 'limit' messages for the LLM, in chronological order."""
+    """Retrieves the last 'limit' messages for the LLM, in chronological order (Oldest -> Newest)."""
     if memory_collection is None: return []
     try:
-        messages = memory_collection.find(
+        # Retrieve the most recent messages first to apply the limit correctly
+        messages = list(memory_collection.find(
             {"user_id": user_id},
             {"_id": 0, "role": 1, "content": 1} 
-        ).sort("timestamp", -1).limit(limit)
+        ).sort("timestamp", -1).limit(limit))
         
-        # Reverse the results to be in chronological order for the LLM context
-        return list(reversed(list(messages)))
+        # Reverse the results so they are in chronological order (Oldest -> Newest)
+        return list(reversed(messages))
     except Exception as e:
         print(f"❌ ERROR: Failed to retrieve user memory from MongoDB. Error: {e}")
         return []
 
 def get_full_history_for_dashboard(user_id: str, limit: int = 100) -> list:
-    """Retrieves full history with timestamps for the dashboard view."""
+    """Retrieves full history with timestamps for the dashboard view, in chronological order (Oldest -> Newest)."""
     if memory_collection is None: return []
     try:
-        messages = memory_collection.find(
+        # Step 1: Get the latest N messages (descending order)
+        messages = list(memory_collection.find(
             {"user_id": user_id},
             {"_id": 0} 
-        ).sort("timestamp", -1).limit(limit)
-        return list(messages)
+        ).sort("timestamp", -1).limit(limit))
+        
+        # Step 2: Reverse them to restore chronological order (Oldest -> Newest)
+        # This ensures the oldest message is at the top [0] and newest at the bottom [last]
+        return list(reversed(messages))
     except Exception as e:
         print(f"❌ ERROR: Failed to retrieve dashboard history from MongoDB. Error: {e}")
         return []

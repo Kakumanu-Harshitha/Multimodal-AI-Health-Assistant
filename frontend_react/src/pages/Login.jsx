@@ -5,7 +5,7 @@ import { Activity, ArrowRight, Loader2 } from 'lucide-react';
 
 const Login = () => {
   const [isLogin, setIsLogin] = useState(true);
-  const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -19,13 +19,13 @@ const Login = () => {
     try {
       let data;
       if (isLogin) {
-        data = await authService.login(username, password);
+        data = await authService.login(email, password);
       } else {
-        data = await authService.signup(username, password);
+        data = await authService.signup(email, password);
       }
       
       localStorage.setItem('token', data.access_token);
-      localStorage.setItem('username', data.username);
+      localStorage.setItem('email', data.email);
       navigate('/chat');
     } catch (err) {
       console.error(err);
@@ -59,13 +59,14 @@ const Login = () => {
             )}
             
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Username</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Email Address</label>
               <input
-                type="text"
+                type="email"
                 required
                 className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="name@example.com"
               />
             </div>
             

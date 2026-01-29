@@ -16,12 +16,15 @@ const Reports = () => {
         const reports = data.filter(msg => msg.role === 'assistant').map(msg => {
             try {
                 const parsed = JSON.parse(msg.content);
-                // Simple check if it looks like a report
-                // Support both old (flat) and new (nested) schemas
-                const hasSummary = !!parsed.summary;
-                const hasSeverity = !!(parsed.severity || parsed.risk_assessment?.severity);
                 
-                if (hasSummary && hasSeverity) {
+                // Identify report types based on schema
+                const isHealthReport = parsed.type === 'health_report' || !!parsed.health_information;
+                const isMedicalAnalysis = parsed.type === 'medical_report_analysis' || !!parsed.test_analysis;
+                const isLegacyMedical = parsed.input_type === 'medical_report' || !!parsed.interpretation;
+                const isImageAnalysis = parsed.input_type === 'medical_image' || !!parsed.observations;
+                const isGeneralReport = !!parsed.summary && (!!parsed.severity || !!parsed.risk_assessment);
+
+                if (isHealthReport || isMedicalAnalysis || isLegacyMedical || isImageAnalysis || isGeneralReport) {
                     return parsed;
                 }
                 return null;

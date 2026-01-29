@@ -12,6 +12,10 @@ from .report_processor import report_processor
 from .auth import get_current_user
 from .models import User, Profile
 from .database import get_db
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+
+limiter = Limiter(key_func=get_remote_address)
 
 # --- Router Setup ---
 router = APIRouter(prefix="/query", tags=["Query Service"])
@@ -93,7 +97,9 @@ def analyze_image_with_mediclip(image: Image.Image) -> str:
 
 # --- NEW UNIFIED MULTIMODAL ENDPOINT ---
 @router.post("/multimodal")
+@limiter.limit("10/minute")
 async def handle_multimodal_query(
+    request: Request,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     text_query: str = Form(""),
@@ -130,10 +136,17 @@ async def handle_multimodal_query(
 
     # 3. Process Medical Report Input (if provided)
     if report_file:
+        print(f"📄 Processing report: {report_file.filename}")
         file_bytes = await report_file.read()
         report_data = report_processor.process_report(file_bytes, report_file.filename)
         report_text = report_data["content"]
-        prompt_parts.append(f"USER UPLOADED MEDICAL REPORT (Content: {report_text[:1000]}...)")
+        print(f"📄 Extracted report text length: {len(report_text)}")
+        
+        # Ensure report_text is never empty if a file was provided
+        if not report_text or not report_text.strip():
+            report_text = f"[Medical Report Uploaded: {report_file.filename} - OCR returned no text]"
+            
+        prompt_parts.append(f"USER UPLOADED MEDICAL REPORT ({report_file.filename}).")
 
     # 4. Process Text Input (if provided)
     if text_query.strip():
@@ -144,7 +157,7 @@ async def handle_multimodal_query(
         raise HTTPException(status_code=400, detail="No input provided. Please provide text, voice, or an image.")
 
     # 5. Fetch User Profile
-    profile_record = db.query(Profile).filter(Profile.username == current_user.username).first()
+    profile_record = db.query(Profile).filter(Profile.email == current_user.email).first()
     profile_dict = {}
     if profile_record:
         profile_dict = {
@@ -172,7 +185,7 @@ async def handle_multimodal_query(
     }
     
     # Call the new Google-Level pipeline
-    text_response = await llm_service.run_clinical_analysis(profile_dict, history, inputs)
+    text_response = await llm_service.run_clinical_analysis(profile_dict, history, inputs, request)
 
     # 7. Generate Voice Response (TTS) - Google Level Feature
     audio_filename = None
@@ -191,6 +204,19 @@ async def handle_multimodal_query(
         elif response_data.get("type") == "health_report":
             # Speak the health information + disclaimer
             text_to_speak = response_data.get("health_information", "") + " " + response_data.get("disclaimer", "")
+            
+        elif response_data.get("type") == "medical_report_analysis":
+            # Speak the summary + disclaimer
+            text_to_speak = response_data.get("summary", "") + " " + response_data.get("disclaimer", "")
+            
+        elif response_data.get("input_type") == "medical_report":
+            # Speak the interpretation + disclaimer
+            text_to_speak = response_data.get("interpretation", "") + " " + response_data.get("disclaimer", "")
+
+        elif response_data.get("input_type") == "medical_image":
+            # Speak the observations summary + disclaimer
+            obs = ", ".join(response_data.get("observations", []))
+            text_to_speak = f"Based on the image, I observe: {obs}. " + response_data.get("disclaimer", "")
             
         elif "health_information" in response_data:
              text_to_speak = response_data["health_information"]

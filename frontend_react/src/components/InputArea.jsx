@@ -49,26 +49,36 @@ const InputArea = ({ onSend, isLoading }) => {
     const file = e.target.files[0];
     if (file) {
       setImageFile(file);
+      setReportFile(null); // Clear report if image is selected
+    }
+  };
+
+  const handleReportUpload = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      setReportFile(file);
+      setImageFile(null); // Clear image if report is selected
     }
   };
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    if ((!text.trim() && !audioBlob && !imageFile) || isLoading) return;
+    if ((!text.trim() && !audioBlob && !imageFile && !reportFile) || isLoading) return;
 
-    onSend({ text, audioBlob, imageFile });
+    onSend({ text, audioBlob, imageFile, reportFile });
     
     // Reset state
     setText('');
     setAudioBlob(null);
     setImageFile(null);
+    setReportFile(null);
   };
 
   return (
     <div className="bg-white border-t border-gray-100 p-4 sticky bottom-0 z-40">
       <div className="max-w-3xl mx-auto">
         {/* Preview Area */}
-        {(audioBlob || imageFile) && (
+        {(audioBlob || imageFile || reportFile) && (
           <div className="flex gap-2 mb-3 overflow-x-auto">
             {audioBlob && (
               <div className="flex items-center gap-2 bg-purple-50 text-purple-700 px-3 py-1.5 rounded-full text-sm border border-purple-100">
@@ -88,14 +98,30 @@ const InputArea = ({ onSend, isLoading }) => {
                 </button>
               </div>
             )}
+            {reportFile && (
+              <div className="flex items-center gap-2 bg-green-50 text-green-700 px-3 py-1.5 rounded-full text-sm border border-green-100">
+                <FileText className="h-3 w-3" />
+                <span className="max-w-[150px] truncate">{reportFile.name}</span>
+                <button onClick={() => setReportFile(null)} className="hover:text-green-900">
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            )}
           </div>
         )}
 
         <form onSubmit={handleSubmit} className="relative flex items-end gap-2 bg-gray-50 p-2 rounded-3xl border border-gray-200 focus-within:ring-2 focus-within:ring-primary/20 focus-within:border-primary/50 transition-all">
-          <label className="p-3 text-gray-400 hover:text-primary cursor-pointer transition-colors" title="Upload Image">
-            <input type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
-            <ImageIcon className="h-5 w-5" />
-          </label>
+          <div className="flex items-center">
+            <label className="p-3 text-gray-400 hover:text-primary cursor-pointer transition-colors" title="Upload Image (Skin/Physical)">
+              <input type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
+              <ImageIcon className="h-5 w-5" />
+            </label>
+            
+            <label className="p-3 text-gray-400 hover:text-primary cursor-pointer transition-colors" title="Upload Medical Report (PDF/Image)">
+              <input type="file" accept="image/*,application/pdf" className="hidden" onChange={handleReportUpload} />
+              <FileText className="h-5 w-5" />
+            </label>
+          </div>
 
           <textarea
             value={text}

@@ -1,25 +1,72 @@
 # backend/llm_service.py
 import os
 import json
+import groq
+from typing import Any
 from groq import AsyncGroq
 from dotenv import load_dotenv
-from typing import Dict, List, Any
+from fastapi import Request
 from .schemas import RiskAssessment, Explanation, Recommendations, HealthReport
 from . import mongo_memory
 from .rag_service import rag_service
 from .structured_memory import structured_memory
-from .rag_router import rag_router, QueryIntent
+from .rag_router import rag_router, QueryIntent, DatasetType
+from .audit_logger import audit_logger
 
 load_dotenv()
 
 # --- Configuration ---
-LLM_MODEL = "llama-3.3-70b-versatile"
+PRIMARY_MODEL = "llama-3.3-70b-versatile"
+FALLBACK_MODEL = "llama-3.1-8b-instant"  # Faster, higher rate limits
+LLM_MODEL = PRIMARY_MODEL
+
 client = AsyncGroq(api_key=os.getenv("GROQ_API_KEY")) if os.getenv("GROQ_API_KEY") else None
 
 if client:
-    print("✅ Async Groq client for LLM initialized.")
+    print(f"✅ Async Groq client for LLM initialized. Primary: {PRIMARY_MODEL}, Fallback: {FALLBACK_MODEL}")
 else:
     print("⚠️ WARNING: GROQ_API_KEY not found! LLM service disabled.")
+
+async def call_llm_with_fallback(messages: list[dict], response_format: dict | None = None, use_primary: bool = True) -> str:
+    """
+    Calls Groq LLM with automatic fallback to a smaller model if rate limited.
+    """
+    if not client:
+        return json.dumps({"summary": "Service Unavailable", "disclaimer": "Check API Keys"})
+
+    # Determine which model to start with
+    current_model = PRIMARY_MODEL if use_primary else FALLBACK_MODEL
+    
+    try:
+        # Attempt 1
+        print(f"🤖 Calling LLM ({current_model})...")
+        response = await client.chat.completions.create(
+            messages=messages,
+            model=current_model,
+            response_format=response_format
+        )
+        return response.choices[0].message.content
+    except groq.RateLimitError as e:
+        # If we already tried the fallback or if we were using the primary and it failed
+        if current_model == PRIMARY_MODEL:
+            print(f"⚠️ Rate limit reached for {PRIMARY_MODEL}. Falling back to {FALLBACK_MODEL}...")
+            try:
+                # Attempt 2 with fallback model
+                response = await client.chat.completions.create(
+                    messages=messages,
+                    model=FALLBACK_MODEL,
+                    response_format=response_format
+                )
+                return response.choices[0].message.content
+            except Exception as fallback_error:
+                print(f"❌ Fallback model also failed: {fallback_error}")
+                raise fallback_error
+        else:
+            print(f"❌ Rate limit reached for {current_model}. No further fallback available.")
+            raise e
+    except Exception as e:
+        print(f"❌ LLM Error ({current_model}): {e}")
+        raise e
 
 # --- Symptom Fallback Dictionary (CRITICAL SAFETY FEATURE) ---
 # This ensures symptom queries NEVER fail, even if RAG is down or data is missing
@@ -123,7 +170,7 @@ class Guardrails:
     CRITICAL_KEYWORDS = ["suicide", "kill myself", "chest pain", "heart attack", "stroke", "difficulty breathing", "unconscious"]
     
     @staticmethod
-    def check_safety(text: str) -> Dict[str, Any]:
+    def check_safety(text: str) -> dict[str, Any]:
         """
         Deterministic safety check.
         Returns None if safe, or a predefined Error Response if unsafe.
@@ -161,7 +208,7 @@ class Guardrails:
 guardrails = Guardrails()
 
 # --- History Layer (Analysis) ---
-def analyze_history_trends(history: List[Dict], current_symptoms: str) -> str:
+def analyze_history_trends(history: list[dict], current_symptoms: str) -> str:
     """
     Analyzes past messages to detect patterns like worsening symptoms or repetition.
     """
@@ -191,31 +238,28 @@ def analyze_history_trends(history: List[Dict], current_symptoms: str) -> str:
 # --- 7-Core Assessment Pipeline Prompts ---
 
 PROMPT_CONTROLLER = """
-You are a medical assessment controller with STRICT follow-up rules.
+You are a medical assessment controller. Your goal is to decide if a query needs follow-up questions for a better clinical assessment.
 
 Your task is to:
 1. Determine whether the user query is informational (e.g., "What is Wilson disease?") or symptom-based (e.g., "I have a headache").
-2. Decide whether clarification is TRULY NECESSARY to provide a safe assessment.
+2. Decide whether clarification is HELPFUL to provide a more accurate and safe assessment.
 
-🚨 CRITICAL RULES - FOLLOW-UP QUESTIONS:
+🚨 CLINICAL INTERVIEW RULES:
 
-1. NEVER ask follow-up questions for:
-   - COMMON SYMPTOMS: nausea, vomiting, headache, fever, cough, cold, bloating, stomach pain, abdominal pain, diarrhea, constipation, dizziness, fatigue, weakness, chest discomfort, sore throat, runny nose, shortness of breath, body pain, back pain, loss of appetite
-   
-   - DISEASE SYMPTOM QUERIES: Any query asking about "symptoms of [disease]" or "symptoms for [disease]" (e.g., "symptoms of cancer", "symptoms for diabetes", "what are the symptoms of heart disease")
+1. You SHOULD ask follow-up questions if:
+   - The user provides a symptom without duration (e.g., "I have a cough" vs "I've had a cough for 3 days").
+   - The user provides a symptom without severity or triggers.
+   - The input is vague (e.g., "I feel sick").
+   - Knowing 1-2 more details would significantly change the potential advice.
 
-2. For common symptoms OR disease symptom queries: Set "needs_clarification" to FALSE.
+2. You should NOT ask follow-up questions for:
+   - General informational queries about diseases or drugs.
+   - Queries that already contain rich context (duration, severity, location).
+   - "Symptoms of [disease]" queries.
 
-3. You may ONLY ask clarification for:
-   - Vague or ambiguous personal symptoms (e.g., "I don't feel well", "something is wrong")
-   - Rare or complex symptom combinations experienced by the user
-   - Potential emergency situations requiring immediate context
-
-4. If you do ask clarification:
-   - Ask AT MOST 2 short yes/no questions
-   - Questions must be essential for safety, not just helpful
-
-5. Default behavior: Provide the best possible answer with available information.
+3. Follow-up Guidelines:
+   - Ask AT MOST 2 targeted questions.
+   - Questions should be easy for a patient to answer (e.g., "How long has this been happening?", "Is it worse at night?").
 
 OUTPUT FORMAT (JSON):
 {
@@ -224,10 +268,6 @@ OUTPUT FORMAT (JSON):
   "questions": ["Question 1", "Question 2"] (only if needs_clarification is true),
   "detected_intent": "informational" | "symptom_based"
 }
-
-REMEMBER: 
-- For common symptoms: needs_clarification = FALSE
-- For "symptoms of [disease]" queries: needs_clarification = FALSE
 """
 
 PROMPT_MEMORY_SELECTOR = """
@@ -278,16 +318,10 @@ For symptom queries, you MUST provide:
 3. General self-care or lifestyle advice
 4. Warning signs when medical attention is recommended
 
-NEVER respond with:
-- "No information available"
-- "No reliable data found"
-- "I don't know" (for common symptoms)
-
-🚫 LOOP PREVENTION RULES
-- DO NOT ask follow-up questions in your response
-- DO NOT request more information
-- Provide the best possible answer with available data
-- Your response must CONVERGE to an answer, not loop
+🚫 CONVERGENCE RULES
+- Your response must be helpful and informative based on current data.
+- If you need more details to be more specific, you may include ONE polite follow-up question at the very end of your "health_information" field.
+- Ensure the response provides value even if the user doesn't answer the follow-up.
 
 🧾 RESPONSE STRUCTURE (STRICT) 
 You MUST output a JSON object with this structure:
@@ -325,24 +359,175 @@ If feedback is "negative":
 Do not change medical facts. Improve clarity and questioning.
 """
 
+# --- PROMPT: Medical Report Analysis ---
+PROMPT_REPORT_ANALYZER = """
+✅ Medical Lab Result Explanation Assistant – SYSTEM PROMPT 
+
+🔹 Role & Mission
+You are a medical lab result explanation assistant. 
+Your role is NOT to diagnose diseases. 
+Your role is to EXPLAIN what the extracted lab values mean in simple, patient-friendly language.
+
+🔹 Input Data
+- EXTRACTED LAB DATA: {report_text}
+- USER CONTEXT: {user_context}
+- MEDICAL REFERENCE DATA (RAG): {rag_data}
+
+──────────────────────────────── 
+1. NEVER STOP AT EXTRACTION 
+──────────────────────────────── 
+If a test value exists (even if NORMAL), you MUST explain: 
+• What this test measures 
+• What a NORMAL / LOW / HIGH value generally indicates 
+• Whether the value is reassuring or needs attention 
+Do NOT just display tables. Do NOT repeat values without explanation. 
+
+──────────────────────────────── 
+2. STATUS-BASED EXPLANATION RULES 
+──────────────────────────────── 
+If status = NORMAL: 
+• Say this is within the expected healthy range. Explain what this suggests about body function. Reassure the user.
+If status = LOW: 
+• Explain common non-diagnostic reasons. Mention possible nutritional/lifestyle factors. Recommend medical consultation if symptoms exist.
+If status = HIGH: 
+• Explain common non-diagnostic causes (inflammation, infection, stress, dehydration, etc.). Recommend follow-up testing or consultation.
+If status = BORDERLINE: 
+• Explain that values are near limits. Suggest monitoring or repeat testing.
+If status = UNKNOWN: 
+• Explain that the value was not available. Do NOT speculate. Suggest uploading a clearer report if relevant.
+
+──────────────────────────────── 
+3. CONDITION CONTEXT (IMPORTANT) 
+──────────────────────────────── 
+When explaining a test: 
+• Explain the BODY FUNCTION involved (immune system, oxygen transport, clotting, etc.) in simple language. Avoid medical jargon unless explained.
+Example: "Neutrophils help fight bacterial infections." 
+
+──────────────────────────────── 
+4. MULTI-TEST SUMMARY (CRITICAL) 
+──────────────────────────────── 
+Provide a short summary: 
+• Overall impression of the report.
+• Whether results appear reassuring, mixed, or unclear.
+• Mention if findings are partial or complete.
+Example: "Overall, the available values appear mostly within normal limits, which is reassuring. However, this analysis is partial because some parameters were not available." 
+
+──────────────────────────────── 
+5. SAFETY & DISCLAIMER 
+──────────────────────────────── 
+• Do NOT diagnose diseases. Do NOT say the user has anemia, infection, cancer, etc. 
+• Always include: “This interpretation is informational and not a medical diagnosis.” 
+
+──────────────────────────────── 
+6. OUTPUT STRUCTURE (MANDATORY JSON) 
+──────────────────────────────── 
+{{ 
+  "type": "medical_report_analysis", 
+  "summary": "Overall summary (as per Rule 4).", 
+  "test_analysis": [ 
+    {{ 
+      "test_name": "Marker Name (e.g. Hemoglobin)", 
+      "value": "Value (or 'Not Provided')", 
+      "normal_range": "Normal range (or 'Not Provided')", 
+      "status": "Low | Normal | High | Borderline | Unknown", 
+      "explanation": "Combine: 1. What it measures (body function). 2. What the result means. 3. Status explanation (as per Rule 2 & 3)." 
+    }} 
+  ], 
+  "general_guidance": ["Safe lifestyle observations/tips based on findings"], 
+  "when_to_consult_doctor": ["When to consult a doctor based on findings (as per Rule 6)"], 
+  "ai_confidence": "Low | Medium | High (based on data clarity)", 
+  "disclaimer": "This interpretation is informational and not a medical diagnosis." 
+}} 
+
+Tone: Calm, Supportive, Clear, Non-alarming.
+"""
+
+# --- PROMPT: Medical Image Analysis ---
+PROMPT_MEDICAL_IMAGE_ANALYZER = """
+You are a Medical Image Analysis Assistant. Your role is to analyze photos of skin, rashes, wounds, or other visible body conditions.
+
+INPUT DATA:
+- VISION MODEL OBSERVATIONS: {image_caption}
+- USER CONTEXT: {user_context}
+- MEDICAL REFERENCE DATA (RAG): {rag_data}
+
+STEP-BY-STEP WORKFLOW:
+1. FEATURE DESCRIPTION: Describe the visible features reported by the vision model (e.g., "redness", "raised bumps", "discoloration").
+2. POSSIBLE CONDITIONS: Suggest POSSIBLE conditions (non-diagnostic) that match these observations.
+3. GENERAL CARE ADVICE: Provide general, safe advice for managing the visible symptoms.
+4. PROFESSIONAL CONSULTATION: Recommend when to see a doctor.
+
+STRICT RULES:
+- DO NOT PERFORM OCR. Do not try to extract numbers or lab values.
+- DO NOT DIAGNOSE. Use cautious language like "This may be consistent with...", "Possible considerations include...".
+- DESCRIBE VISIBLE FEATURES ONLY. Do not infer internal conditions.
+- BE CALM & EDUCATIONAL.
+
+OUTPUT FORMAT (STRICT JSON):
+{{
+  "input_type": "medical_image",
+  "observations": ["e.g., Redness in a circular pattern", "Itchy appearance"],
+  "possible_conditions": ["e.g., Contact dermatitis", "Eczema flare-up"],
+  "general_advice": "Keep the area clean and dry. Avoid harsh soaps.",
+  "confidence_level": "Low | Medium",
+  "disclaimer": "This information is for educational purposes only and is not a medical diagnosis. Please consult a qualified healthcare professional for medical advice."
+}}
+"""
+
 # --- Reasoning Layer (LLM) ---
-async def run_clinical_analysis(profile: Dict, history: List[Dict], inputs: Dict) -> str:
+async def run_clinical_analysis(profile: dict, history: list[dict], inputs: dict, request: Request | None = None) -> str:
     """
     Main orchestration function for the 'Google-Level' 8-stage pipeline.
     """
+    user_id = int(profile.get("user_id")) if profile.get("user_id") else None
+
     if not client:
+        await audit_logger.log_event(
+            action="AI_QUERY",
+            status="FAILURE",
+            user_id=user_id,
+            request=request,
+            metadata={"reason": "Service Unavailable - API Key missing"}
+        )
         return json.dumps({"summary": "Service Unavailable", "disclaimer": "Check API Keys"})
 
     # --- STEP 1: Input Harmonization (Multimodal) ---
-    user_text = inputs.get("text_query", "")
-    voice_text = inputs.get("transcribed_text", "")
-    image_desc = inputs.get("image_caption", "")
-    report_text = inputs.get("report_text", "")
-    user_confirmation = inputs.get("user_confirmation", "skip").lower() # yes, no, skip
+    user_text = inputs.get("text_query", "") or ""
+    voice_text = inputs.get("transcribed_text", "") or ""
+    image_desc = inputs.get("image_caption", "") or ""
+    report_text = inputs.get("report_text", "") or ""
+    user_confirmation = (inputs.get("user_confirmation", "skip") or "skip").lower()
     
+    print(f"DEBUG: Harmonized report_text length: {len(report_text)}")
+    if report_text:
+        print(f"DEBUG: report_text snippet: {report_text[:100]}...")
+    
+    # Ensure combined_input has at least a placeholder if report_text exists but OCR failed
     combined_input = f"{user_text} {voice_text} {image_desc} {report_text}".strip()
-    if not combined_input:
-        return json.dumps({"summary": "No input provided.", "disclaimer": "Please provide symptoms."})
+    if not combined_input and report_text:
+        combined_input = "[Medical Report Analysis Requested]"
+        
+    # Check if ANY input was provided (including multimodal data)
+    has_any_input = any([user_text, voice_text, image_desc, report_text])
+    
+    if not has_any_input:
+        return json.dumps({"summary": "No input provided.", "disclaimer": "Please provide symptoms or upload a report."})
+
+    # --- STEP 1.5: Detect Analysis Mode ---
+    is_report_analysis = False
+    if report_text:
+        is_report_analysis = True
+        if "[PDF Report Uploaded" in report_text or "[Image Report Uploaded" in report_text:
+            print("⚠️ Report Analysis Mode (Placeholder detected)")
+        else:
+            print("📋 Entering Medical Report Analysis Mode")
+    
+    is_image_analysis = bool(image_desc) and not is_report_analysis
+
+    if is_report_analysis:
+        print("📋 Entering Medical Report Analysis Mode")
+    elif is_image_analysis:
+        print("📷 Entering Medical Image Analysis Mode")
 
     # --- STEP 2: Deterministic Guardrails (Safety) ---
     safety_result = guardrails.check_safety(combined_input)
@@ -354,8 +539,13 @@ async def run_clinical_analysis(profile: Dict, history: List[Dict], inputs: Dict
     # This improves response time and reduces API costs for common queries
     query_lower = combined_input.lower()
     
-    # Check for direct symptom mentions
-    symptom_shortcut = get_symptom_fallback(combined_input)
+    # Skip symptom shortcut if in report analysis mode
+    if is_report_analysis:
+        print("⏭️ Skipping symptom shortcut for report analysis")
+        symptom_shortcut = None
+    else:
+        # Check for direct symptom mentions
+        symptom_shortcut = get_symptom_fallback(combined_input)
     
     # Also check for "symptoms of/for [disease]" pattern - these should NOT use shortcut
     is_disease_symptom_query = any(pattern in query_lower for pattern in [
@@ -389,8 +579,32 @@ async def run_clinical_analysis(profile: Dict, history: List[Dict], inputs: Dict
     if symptom_shortcut and not is_disease_symptom_query and user_confirmation != "yes":
         print(f"⚡ SYMPTOM SHORTCUT: Bypassing LLM for common symptom: {combined_input[:50]}...")
         
+        # Check if we should ask a follow-up even for shortcut symptoms (e.g., if very brief)
+        intent_enum = QueryIntent.SYMPTOM_QUERY
+        if rag_router.should_ask_follow_up(combined_input, intent_enum, history):
+             await audit_logger.log_event(
+                action="AI_QUERY",
+                status="SUCCESS",
+                user_id=user_id,
+                request=request,
+                metadata={"type": "clarification_triggered", "symptom": combined_input[:50]}
+             )
+             return json.dumps({
+                "type": "clarification_questions",
+                "context": f"I can certainly help you with information about {combined_input}. To be more specific:",
+                "questions": ["How long have you been experiencing this?", "Are there any other symptoms accompanying it?"],
+                "requires_confirmation": True
+            })
+
         # If already discussed, provide follow-up response
         if already_discussed:
+            await audit_logger.log_event(
+                action="AI_QUERY",
+                status="SUCCESS",
+                user_id=user_id,
+                request=request,
+                metadata={"type": "symptom_shortcut", "already_discussed": True, "symptom": combined_input[:50]}
+            )
             return json.dumps({
                 "type": "health_report",
                 "health_information": f"I see you're still experiencing this symptom. {symptom_shortcut}\n\nSince this is continuing, I recommend:\n1. Keep track of when it occurs and any triggers\n2. Note if it's getting better, worse, or staying the same\n3. Consider consulting a healthcare professional if it persists or worsens",
@@ -403,6 +617,13 @@ async def run_clinical_analysis(profile: Dict, history: List[Dict], inputs: Dict
             })
         
         # First time discussing this symptom
+        await audit_logger.log_event(
+            action="AI_QUERY",
+            status="SUCCESS",
+            user_id=user_id,
+            request=request,
+            metadata={"type": "symptom_shortcut", "already_discussed": False, "symptom": combined_input[:50]}
+        )
         return json.dumps({
             "type": "health_report",
             "health_information": symptom_shortcut,
@@ -416,45 +637,55 @@ async def run_clinical_analysis(profile: Dict, history: List[Dict], inputs: Dict
 
     # --- STEP 3: Intent Detection (RAG Router) ---
     # Use RAG router for deterministic, enterprise-grade intent detection
-    intent_enum = rag_router.detect_intent(combined_input, history)
-    detected_intent = intent_enum.name.lower().replace('_query', '_based')  # Convert to old format for compatibility
+    if is_report_analysis:
+        intent_enum = QueryIntent.TEST_OR_REPORT_QUERY
+        detected_intent = "test_or_report_based"
+    else:
+        intent_enum = rag_router.detect_intent(combined_input, history)
+        detected_intent = intent_enum.name.lower().replace('_query', '_based')  # Convert to old format for compatibility
+    
     print(f"🎯 RAG Router detected intent: {intent_enum.name} -> {detected_intent}")
     
     # Also run LLM controller for clarification decision (but use router intent)
-    controller_response = await client.chat.completions.create(
-        messages=[
-            {"role": "system", "content": PROMPT_CONTROLLER},
-            {"role": "user", "content": f"User Input: {combined_input}"}
-        ],
-        model=LLM_MODEL,
-        response_format={"type": "json_object"}
-    )
-    ctrl_content = controller_response.choices[0].message.content
-    try:
-        ctrl = json.loads(ctrl_content)
-        # Override LLM intent with router intent (router is more reliable)
-        ctrl["detected_intent"] = detected_intent
-        print(f"🎯 Final intent: {detected_intent}")
+    if is_report_analysis:
+        # Skip controller for report analysis - go straight to retrieval
+        ctrl = {"needs_clarification": False, "detected_intent": detected_intent}
+    else:
+        # STEP 3: Use call_llm_with_fallback with use_primary=False to save tokens on primary model
+        ctrl_content = await call_llm_with_fallback(
+            messages=[
+                {"role": "system", "content": PROMPT_CONTROLLER},
+                {"role": "user", "content": f"User Input: {combined_input}"}
+            ],
+            response_format={"type": "json_object"},
+            use_primary=False  # Intent detection is simple, use smaller model by default
+        )
+        try:
+            ctrl = json.loads(ctrl_content)
+            # Override LLM intent with router intent (router is more reliable)
+            ctrl["detected_intent"] = detected_intent
+            print(f"🎯 Final intent: {detected_intent}")
+        except json.JSONDecodeError:
+            print(f"⚠️ Controller JSON Error: {ctrl_content}")
+            ctrl = {"needs_clarification": False, "detected_intent": detected_intent}
+    
+    # --- STEP 4: Clarification Loop (Follow-up) with CONVERSATION STATE CHECK ---
+    # Only ask clarification if:
+    # 1. This is the FIRST interaction (user_confirmation == "skip")
+    # 2. We haven't already asked clarification for this query in conversation history
+    
+    if not is_report_analysis and user_confirmation == "skip":
+        # Use RAG router's anti-loop logic for follow-up decision
+        should_ask = rag_router.should_ask_follow_up(combined_input, intent_enum, history)
         
-        # --- STEP 4: Clarification Loop (Follow-up) with CONVERSATION STATE CHECK ---
-        # Only ask clarification if:
-        # 1. This is the FIRST interaction (user_confirmation == "skip")
-        # 2. We haven't already asked clarification for this query in conversation history
-        
-        if user_confirmation == "skip":
-            # Use RAG router's anti-loop logic for follow-up decision
-            should_ask = rag_router.should_ask_follow_up(combined_input, intent_enum, history)
-            
-            # If router says ask AND controller agrees, then ask
-            if should_ask and ctrl.get("needs_clarification") and detected_intent == "symptom_based":
-                return json.dumps({
-                    "type": "clarification_questions",
-                    "context": "To provide a more accurate assessment, I have a few follow-up questions:",
-                    "questions": ctrl.get("questions", ["Have you experienced this before?"]),
-                    "requires_confirmation": True # Trigger Yes/No/Skip UI in frontend
-                })
-    except json.JSONDecodeError:
-        print(f"⚠️ Controller JSON Error: {ctrl_content}")
+        # If router says ask AND controller agrees, then ask
+        if should_ask and ctrl.get("needs_clarification") and detected_intent == "symptom_based":
+            return json.dumps({
+                "type": "clarification_questions",
+                "context": "To provide a more accurate assessment, I have a few follow-up questions:",
+                "questions": ctrl.get("questions", ["Have you experienced this before?"]),
+                "requires_confirmation": True # Trigger Yes/No/Skip UI in frontend
+            })
 
     # --- STEP 5: Contextual Memory Selection (Memory Selector) ---
     user_id = str(profile.get("user_id", "unknown"))
@@ -465,7 +696,7 @@ async def run_clinical_analysis(profile: Dict, history: List[Dict], inputs: Dict
         raw_memory = structured_memory.summarize_memory(relevant_memory_chunks)
         
         if raw_memory and raw_memory != "No relevant past context found.":
-            memory_selector_resp = await client.chat.completions.create(
+            confirmed_context = await call_llm_with_fallback(
                 messages=[
                     {"role": "system", "content": PROMPT_MEMORY_SELECTOR.format(
                         user_input=combined_input,
@@ -473,12 +704,11 @@ async def run_clinical_analysis(profile: Dict, history: List[Dict], inputs: Dict
                         past_data=raw_memory
                     )}
                 ],
-                model=LLM_MODEL
+                use_primary=False # Memory selection is simple, use smaller model
             )
-            confirmed_context = memory_selector_resp.choices[0].message.content
 
     # --- STEP 6: Evidence Retrieval (RAG Router) ---
-    rag_data = "No verified medical information found for this specific query."
+    rag_data = "No specific reference data found. Use general medical knowledge for terminology."
     if rag_service.enabled:
         # Use RAG router for query augmentation and dataset routing
         search_query = rag_router.augment_query(combined_input, intent_enum)
@@ -493,6 +723,15 @@ async def run_clinical_analysis(profile: Dict, history: List[Dict], inputs: Dict
         
         # Filter results based on intent-specific dataset routing
         allowed_datasets = rag_router.get_dataset_routing(intent_enum)
+        
+        # SPECIAL RULE: For report analysis, use ONLY MedlinePlus/WHO/NHS
+        if is_report_analysis:
+            allowed_datasets = [
+                DatasetType.MEDLINEPLUS,
+                DatasetType.WHO_NHS
+            ]
+            print("🛡️ REPORT ANALYSIS: Restricting sources to MedlinePlus/WHO/NHS only")
+            
         docs = rag_router.filter_results_by_dataset(docs, allowed_datasets)
         print(f"📊 Retrieved {len(docs)} results from allowed datasets: {[d.name for d in allowed_datasets]}")
         
@@ -554,21 +793,61 @@ async def run_clinical_analysis(profile: Dict, history: List[Dict], inputs: Dict
 
     # --- STEP 7: Medical Report Generation (Medical RAG) ---
     try:
-        final_response = await client.chat.completions.create(
+        if is_report_analysis:
+            print("📝 Using PROMPT_REPORT_ANALYZER")
+            prompt_content = PROMPT_REPORT_ANALYZER.format(
+                report_text=report_text,
+                user_context=confirmed_context,
+                rag_data=rag_data
+            )
+        elif is_image_analysis:
+            print("🖼️ Using PROMPT_MEDICAL_IMAGE_ANALYZER")
+            prompt_content = PROMPT_MEDICAL_IMAGE_ANALYZER.format(
+                image_caption=image_desc,
+                user_context=confirmed_context,
+                rag_data=rag_data
+            )
+        else:
+            print("🏥 Using PROMPT_MEDICAL_RAG")
+            prompt_content = PROMPT_MEDICAL_RAG.format(
+                user_query=combined_input,
+                user_context=confirmed_context,
+                rag_data=rag_data
+            )
+            
+        final_response_content = await call_llm_with_fallback(
             messages=[
-                {"role": "system", "content": PROMPT_MEDICAL_RAG.format(
-                    user_query=combined_input,
-                    user_context=confirmed_context,
-                    rag_data=rag_data
-                )}
+                {"role": "system", "content": prompt_content}
             ],
-            model=LLM_MODEL,
-            response_format={"type": "json_object"}
+            response_format={"type": "json_object"},
+            use_primary=True # Use big model for final analysis, fallback if needed
         )
         # --- STEP 8: Feedback Refinement (Handled by feedback_router.py) ---
-        return final_response.choices[0].message.content
+        await audit_logger.log_event(
+            action="AI_QUERY",
+            status="SUCCESS",
+            user_id=user_id,
+            request=request,
+            metadata={
+                "model": LLM_MODEL,
+                "intent": detected_intent,
+                "is_report_analysis": is_report_analysis,
+                "is_image_analysis": is_image_analysis,
+                "has_voice": bool(voice_text),
+                "has_image": bool(image_desc),
+                "has_report": bool(report_text)
+            }
+        )
+        return final_response_content
     except Exception as e:
         print(f"❌ Final RAG Error: {e}")
+        await audit_logger.log_event(
+            action="AI_QUERY",
+            status="FAILURE",
+            user_id=user_id,
+            request=request,
+            metadata={"error": str(e), "model": LLM_MODEL}
+        )
         print(f"❌ Error type: {type(e).__name__}")
         print(f"❌ Query was: {combined_input[:100]}")
         import traceback

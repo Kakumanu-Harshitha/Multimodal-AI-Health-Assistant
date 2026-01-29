@@ -18,3 +18,7 @@ bcrypt==3.2.2
 pinecone
 sentence-transformers
 numpy
+pyotp
+qrcode
+cryptography
+slowapi

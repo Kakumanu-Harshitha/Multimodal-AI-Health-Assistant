@@ -14,10 +14,8 @@ const Chat = () => {
   const fetchHistory = async () => {
     try {
       const data = await dashboardService.getHistory();
-      // Reverse to show oldest first if API returns newest first
-      // Assuming API returns chronological or we need to sort
-      // Based on app.py, it returned reversed(history) for display, implying history is chronological in DB?
-      // Let's assume API returns chronological list of {role, content}
+      // The backend now returns messages in chronological order (Oldest -> Newest)
+      // We render them exactly as received from the single source of truth.
       setHistory(data);
     } catch (error) {
       console.error("Failed to fetch history:", error);
@@ -36,17 +34,24 @@ const Chat = () => {
     }
   }, [history]);
 
-  const handleSend = async ({ text, audioBlob, imageFile }) => {
+  const handleSend = async ({ text, audioBlob, imageFile, reportFile }) => {
     // Optimistic update
+    let content = text;
+    if (!content) {
+      if (audioBlob) content = '🎤 Voice Message';
+      else if (imageFile) content = '📷 Image Upload (Physical)';
+      else if (reportFile) content = '📄 Medical Report Upload';
+    }
+
     const userMsg = {
       role: 'user',
-      content: text || (audioBlob ? '🎤 Voice Message' : '📷 Image Upload')
+      content: content
     };
     setHistory(prev => [...prev, userMsg]);
     setLoading(true);
 
     try {
-      const response = await queryService.sendMultimodalQuery(text, audioBlob, imageFile);
+      const response = await queryService.sendMultimodalQuery(text, audioBlob, imageFile, reportFile);
       
       const aiMsg = {
         role: 'assistant',

@@ -8,6 +8,7 @@ from .profile_router import router as profile_router
 from .report_router import router as report_router
 from .security_router import router as security_router
 from .feedback_router import router as feedback_router
+from .owner_router import router as owner_router
 from . import query_service, dashboard_service  
 from . import models  
 import os
@@ -25,7 +26,7 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Create tables
-Base.metadata.create_all(bind=engine)
+# Base.metadata.create_all(bind=engine)
 
 # Mount static directory for audio
 static_dir = os.path.join(os.path.dirname(__file__), "static")
@@ -73,6 +74,7 @@ app.include_router(profile_router)
 app.include_router(report_router)
 app.include_router(security_router)
 app.include_router(feedback_router)
+app.include_router(owner_router)
 app.include_router(query_service.router)
 app.include_router(dashboard_service.router)
 

@@ -30,6 +30,14 @@ export const authService = {
   logout: () => {
     localStorage.removeItem('token');
     localStorage.removeItem('email');
+  },
+  forgotPassword: async (email) => {
+    const response = await api.post('/auth/forgot-password', { email });
+    return response.data;
+  },
+  resetPassword: async (token, newPassword) => {
+    const response = await api.post('/auth/reset-password', { token, new_password: newPassword });
+    return response.data;
   }
 };
 
@@ -88,10 +96,10 @@ export const dashboardService = {
 };
 
 export const feedbackService = {
-  submitFeedback: async (rating, context) => {
+  submitFeedback: async (helpful, details = {}) => {
     const response = await api.post('/feedback/', {
-      rating,
-      context
+      helpful,
+      ...details
     });
     return response.data;
   }
@@ -108,6 +116,41 @@ export const securityService = {
   },
   completeChangePassword: async (newPassword) => {
     const response = await api.post('/security/change-password/complete', { new_password: newPassword });
+    return response.data;
+  }
+};
+
+export const ownerService = {
+  getHealthMetrics: async () => {
+    const response = await api.get('/owner/health-metrics');
+    return response.data;
+  },
+  getSatisfactionMetrics: async () => {
+    const response = await api.get('/owner/satisfaction-metrics');
+    return response.data;
+  },
+  getModelMetrics: async () => {
+    const response = await api.get('/owner/model-metrics');
+    return response.data;
+  },
+  getSecurityMetrics: async () => {
+    const response = await api.get('/owner/security-metrics');
+    return response.data;
+  },
+  getHitlMetrics: async () => {
+    const response = await api.get('/owner/hitl-metrics');
+    return response.data;
+  },
+  getAuditLogs: async (params = {}) => {
+    const response = await api.get('/owner/audit-logs', { params });
+    return response.data;
+  },
+  getToggles: async () => {
+    const response = await api.get('/owner/toggles');
+    return response.data;
+  },
+  updateToggle: async (key, value) => {
+    const response = await api.post(`/owner/toggles?key=${key}&value=${value}`);
     return response.data;
   }
 };

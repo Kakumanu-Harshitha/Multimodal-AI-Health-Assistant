@@ -10,12 +10,19 @@ from . import llm_service
 from . import speech_service
 from .report_processor import report_processor
 from .auth import get_current_user
-from .models import User, Profile
+from .models import User, Profile, SystemConfig
 from .database import get_db
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 limiter = Limiter(key_func=get_remote_address)
+
+# Helper to check feature toggles
+def is_feature_enabled(db: Session, key: str) -> bool:
+    config = db.query(SystemConfig).filter(SystemConfig.key == key).first()
+    if not config:
+        return True # Default to ON if not configured
+    return config.value == "ON"
 
 # --- Router Setup ---
 router = APIRouter(prefix="/query", tags=["Query Service"])
@@ -33,10 +40,12 @@ try:
     
     # Pre-defined medical concepts for Zero-Shot Classification / Feature Extraction
     CANDIDATE_LABELS = [
-        "Chest X-ray", "MRI Scan", "CT Scan", "Dermatology Skin Lesion", 
-        "Ultrasound", "Microscope Slide", "Normal Healthy Tissue",
-        "Bone Fracture", "Pneumonia", "Lung Opacity", "Brain Tumor",
-        "Skin Rash", "Medical Graph or Chart", "Prescription Paper"
+        "Chest X-ray", "Chest Radiograph", "MRI Scan", "CT Scan", 
+        "Dermatology Skin Condition", "Skin Rash", "Skin Lesion",
+        "Eye Ophthalmology", "Retina Scan", "Red Eye", "Ocular Condition",
+        "Medical Document", "Prescription", "Lab Report", "Chart or Graph",
+        "Ultrasound", "Microscope Slide", "Healthy Human Tissue",
+        "Bone X-ray", "Fracture", "Pneumonia", "Lung Inflammation"
     ]
     
 except Exception as e:
@@ -81,14 +90,13 @@ def analyze_image_with_mediclip(image: Image.Image) -> str:
         findings = []
         for i in range(top_k):
             score = values[i].item()
-            if score > 0.05: # Confidence threshold
-                label = CANDIDATE_LABELS[indices[i].item()]
-                findings.append(f"{label} ({score:.1%})")
+            label = CANDIDATE_LABELS[indices[i].item()]
+            findings.append(f"{label} ({score:.4f})")
         
         if not findings:
-            return "Unclear medical image."
+            return "Unclear medical image. Confidence low."
             
-        return "Image Analysis Findings: " + ", ".join(findings)
+        return "MediCLIP Analysis: " + ", ".join(findings)
 
     except Exception as e:
         print(f"❌ MediCLIP Error: {e}")
@@ -126,6 +134,9 @@ async def handle_multimodal_query(
 
     # 2. Process Image Input (if provided)
     if image_file:
+        if not is_feature_enabled(db, "feature_image_analysis"):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Image analysis is currently disabled by system administrator.")
+            
         if not model or not preprocess or not tokenizer:
             raise HTTPException(status_code=503, detail="Image processing service is currently unavailable.")
         image = Image.open(image_file.file).convert("RGB")
@@ -232,10 +243,11 @@ async def handle_multimodal_query(
 
     # 8. Store the conversation
     mongo_memory.store_message(user_id_str, "user", final_prompt)
-    mongo_memory.store_message(user_id_str, "assistant", text_response)
+    query_id = mongo_memory.store_message(user_id_str, "assistant", text_response)
 
     # 9. Return all relevant data to the frontend
     return {
+        "query_id": query_id,
         "text_response": text_response,
         "transcribed_text": transcribed_text,
         "image_caption": image_caption,

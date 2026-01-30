@@ -24,18 +24,20 @@ else:
     print("⚠️ WARNING: MONGO_URI not found! Memory service disabled.")
 
 
-def store_message(user_id: str, role: str, content: str):
-    """Stores a message in the user's conversation history."""
-    if memory_collection is None: return
+def store_message(user_id: str, role: str, content: str) -> str:
+    """Stores a message in the user's conversation history. Returns the string ID."""
+    if memory_collection is None: return None
     try:
-        memory_collection.insert_one({
+        result = memory_collection.insert_one({
             "user_id": user_id,
             "role": role,
             "content": content,
             "timestamp": datetime.now(timezone.utc)
         })
+        return str(result.inserted_id)
     except Exception as e:
         print(f"❌ ERROR: Failed to store message in MongoDB. Error: {e}")
+        return None
 
 def log_feedback(user_id: str, rating: str, comment: str = None, context: str = None):
     """Logs user feedback (helpful/not helpful)."""
@@ -85,11 +87,15 @@ def get_full_history_for_dashboard(user_id: str, limit: int = 100) -> list:
     try:
         # Step 1: Get the latest N messages (descending order)
         messages = list(memory_collection.find(
-            {"user_id": user_id},
-            {"_id": 0} 
+            {"user_id": user_id}
         ).sort("timestamp", -1).limit(limit))
         
-        # Step 2: Reverse them to restore chronological order (Oldest -> Newest)
+        # Step 2: Convert ObjectId to string for JSON serialization
+        for msg in messages:
+            msg["query_id"] = str(msg["_id"])
+            del msg["_id"]
+        
+        # Step 3: Reverse them to restore chronological order (Oldest -> Newest)
         # This ensures the oldest message is at the top [0] and newest at the bottom [last]
         return list(reversed(messages))
     except Exception as e:

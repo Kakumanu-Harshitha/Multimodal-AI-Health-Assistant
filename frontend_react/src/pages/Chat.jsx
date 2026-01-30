@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import Header from '../components/Header';
 import InputArea from '../components/InputArea';
 import ReportCard from '../components/ReportCard';
+import FeedbackItem from '../components/FeedbackItem';
 import { dashboardService, queryService } from '../services/api';
 import { Loader2, User, Bot, Trash2 } from 'lucide-react';
 
@@ -56,7 +57,8 @@ const Chat = () => {
       const aiMsg = {
         role: 'assistant',
         content: response.text_response,
-        audio_url: response.audio_url
+        audio_url: response.audio_url,
+        query_id: response.query_id
       };
       setHistory(prev => [...prev, aiMsg]);
     } catch (error) {
@@ -133,6 +135,7 @@ const Chat = () => {
                   ) : (
                     <div className="max-w-[100%]">
                       <ReportCard data={msg.content} audioUrl={msg.audio_url} />
+                      {msg.role === 'assistant' && <FeedbackItem queryId={msg.query_id || idx} />}
                     </div>
                   )}
                 </div>

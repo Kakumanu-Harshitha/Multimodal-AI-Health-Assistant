@@ -87,3 +87,20 @@ class TOTPVerifyIn(BaseModel):
 
 class PasswordChangeIn(BaseModel):
     new_password: str
+
+# --- Forgot Password Schemas ---
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+class PasswordResetConfirm(BaseModel):
+    token: str
+    new_password: str
+
+# --- Feedback Schemas ---
+class FeedbackIn(BaseModel):
+    query_id: Optional[str] = None
+    helpful: bool
+    reason: Optional[str] = None
+    comment: Optional[str] = None
+    model_used: Optional[str] = None
+    confidence_score: Optional[float] = None
